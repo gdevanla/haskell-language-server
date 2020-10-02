@@ -25,3 +25,4 @@ test/testdata/**/hie.yaml
 
 # metadata files on macOS
 .DS_Store
+dist
