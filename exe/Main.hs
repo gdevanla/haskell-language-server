@@ -40,7 +40,7 @@ idePlugins includeExamples = pluginDescToIdePlugins allPlugins
   where
     allPlugins = if includeExamples
                    then basePlugins ++ examplePlugins
-                   else basePlugins
+                   else basePlugins ++ examplePlugins
     basePlugins =
       [ GhcIde.descriptor  "ghcide"
       , Pragmas.descriptor  "pragmas"
@@ -69,7 +69,7 @@ main :: IO ()
 main = do
     args <- getArguments "haskell-language-server"
 
-    let withExamples = 
+    let withExamples =
             case args of
                 LspMode (LspArguments{..}) -> argsExamplePlugin
                 _ -> False

@@ -210,7 +210,7 @@ completion _lf _ide (CompletionParams _doc _pos _mctxt _mt)
                            sortText filterText insertText insertTextFormat
                            textEdit additionalTextEdits commitCharacters
                            command xd
-        label = "Example completion"
+        label = "my_completions_show_up_here"
         kind = Nothing
         tags = List []
         detail = Nothing
@@ -219,7 +219,7 @@ completion _lf _ide (CompletionParams _doc _pos _mctxt _mt)
         preselect = Nothing
         sortText = Nothing
         filterText = Nothing
-        insertText = Nothing
+        insertText = Just "our_completions_are_going_to_get_better"
         insertTextFormat = Nothing
         textEdit = Nothing
         additionalTextEdits = Nothing
