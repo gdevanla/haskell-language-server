@@ -12,7 +12,8 @@ import Ide.Types (IdePlugins)
  -- haskell-language-server plugins
 import Ide.Plugin.Eval                    as Eval
 import Ide.Plugin.Example                 as Example
-import Ide.Plugin.Example2                as Example2
+import Ide.Plugin.Example2 as Example2
+import Ide.Plugin.CustomCompletions as CustomCompletions
 import Ide.Plugin.GhcIde                  as GhcIde
 import Ide.Plugin.Floskell                as Floskell
 import Ide.Plugin.Fourmolu                as Fourmolu
@@ -39,8 +40,8 @@ idePlugins :: Bool -> IdePlugins
 idePlugins includeExamples = pluginDescToIdePlugins allPlugins
   where
     allPlugins = if includeExamples
-                   then basePlugins ++ examplePlugins
-                   else basePlugins ++ examplePlugins
+                   then basePlugins ++ examplePlugins ++ customCompletions
+                   else basePlugins ++ examplePlugins ++ customCompletions
     basePlugins =
       [ GhcIde.descriptor  "ghcide"
       , Pragmas.descriptor  "pragmas"
@@ -62,6 +63,7 @@ idePlugins includeExamples = pluginDescToIdePlugins allPlugins
       [Example.descriptor  "eg"
       ,Example2.descriptor "eg2"
       ]
+    customCompletions = [CustomCompletions.descriptor "wyap"]
 
 -- ---------------------------------------------------------------------
 

@@ -85,6 +85,7 @@ executable haskell-language-server
     Ide.Plugin.Eval
     Ide.Plugin.Example
     Ide.Plugin.Example2
+    Ide.Plugin.CustomCompletions
     Ide.Plugin.Floskell
     Ide.Plugin.Fourmolu
     Ide.Plugin.ImportLens
