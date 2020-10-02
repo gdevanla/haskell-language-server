@@ -32,6 +32,8 @@ import Ide.Types
 import Language.Haskell.LSP.Types
 import Text.Regex.TDFA.Text()
 
+import qualified Language.Haskell.LSP.Core as LSP
+
 -- ---------------------------------------------------------------------
 
 descriptor :: PluginId -> PluginDescriptor
@@ -42,7 +44,7 @@ descriptor plId = (defaultPluginDescriptor plId)
   , pluginCodeLensProvider   = Just codeLens
   , pluginHoverProvider      = Just hover
   , pluginSymbolsProvider    = Just symbols
-  , pluginCompletionProvider = Just completion
+  , pluginCompletionProvider = Just getCompletionsLSP
   }
 
 -- ---------------------------------------------------------------------
@@ -202,14 +204,38 @@ symbols _lf _ide (DocumentSymbolParams _doc _mt)
 
 -- ---------------------------------------------------------------------
 
-completion :: CompletionProvider
-completion _lf _ide (CompletionParams _doc _pos _mctxt _mt)
-    = pure $ Right $ Completions $ List [r]
-    where
-        r = CompletionItem label kind tags detail documentation deprecated preselect
+-- completion :: CompletionProvider
+-- completion _lf _ide (CompletionParams _doc _pos _mctxt _mt)
+--     = pure $ Right $ Completions $ List [r]
+--     where
+--         r = CompletionItem label kind tags detail documentation deprecated preselect
+--                            sortText filterText insertText insertTextFormat
+--                            textEdit additionalTextEdits commitCharacters
+--                            command xd
+--         label = "my_completions_show_up_here"
+--         kind = Nothing
+--         tags = List []
+--         detail = Nothing
+--         documentation = Nothing
+--         deprecated = Nothing
+--         preselect = Nothing
+--         sortText = Nothing
+--         filterText = Nothing
+--         insertText = Just "our_completions_are_going_to_get_better"
+--         insertTextFormat = Nothing
+--         textEdit = Nothing
+--         additionalTextEdits = Nothing
+--         commitCharacters = Nothing
+--         command = Nothing
+--         xd = Nothing
+
+sampleCompletionItem :: CompletionItem
+sampleCompletionItem =
+    CompletionItem label kind tags detail documentation deprecated preselect
                            sortText filterText insertText insertTextFormat
                            textEdit additionalTextEdits commitCharacters
                            command xd
+    where
         label = "my_completions_show_up_here"
         kind = Nothing
         tags = List []
@@ -219,7 +245,7 @@ completion _lf _ide (CompletionParams _doc _pos _mctxt _mt)
         preselect = Nothing
         sortText = Nothing
         filterText = Nothing
-        insertText = Just "our_completions_are_going_to_get_better"
+        insertText = Just "completion_from_get_completion"
         insertTextFormat = Nothing
         textEdit = Nothing
         additionalTextEdits = Nothing
@@ -227,4 +253,14 @@ completion _lf _ide (CompletionParams _doc _pos _mctxt _mt)
         command = Nothing
         xd = Nothing
 
+
+
+getCompletionsLSP :: CompletionProvider
+getCompletionsLSP lsp _ide
+    CompletionParams {_textDocument=TextDocumentIdentifier uri
+                     ,_position=_position
+                     ,_context=_completionContext} = do
+    contents <- LSP.getVirtualFileFunc lsp $ toNormalizedUri uri
+    print contents
+    return $ Right $ Completions $ List [sampleCompletionItem]
 -- ---------------------------------------------------------------------
