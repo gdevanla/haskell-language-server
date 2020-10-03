@@ -245,7 +245,7 @@ sampleCompletionItem =
         preselect = Nothing
         sortText = Nothing
         filterText = Nothing
-        insertText = Just "completion_from_get_completion"
+        insertText = Just "completion_from_get_completion v2"
         insertTextFormat = Nothing
         textEdit = Nothing
         additionalTextEdits = Nothing
@@ -254,13 +254,18 @@ sampleCompletionItem =
         xd = Nothing
 
 
-
 getCompletionsLSP :: CompletionProvider
-getCompletionsLSP lsp _ide
+getCompletionsLSP lsp ide
     CompletionParams {_textDocument=TextDocumentIdentifier uri
                      ,_position=_position
                      ,_context=_completionContext} = do
     contents <- LSP.getVirtualFileFunc lsp $ toNormalizedUri uri
     print contents
-    return $ Right $ Completions $ List [sampleCompletionItem]
+    fmap Right $ case (contents, uriToFilePath' uri) of
+        (Just _cnts, Just _path) -> do
+            let _npath = toNormalizedFilePath' _path
+            (_ideOpts, _compls) <- runIdeAction "Completion" (shakeExtras ide) $ do
+                return (Nothing, Nothing)
+            return $ Completions $ List [sampleCompletionItem]
+        _ -> return $ Completions $ List []
 -- ---------------------------------------------------------------------
