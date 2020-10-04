@@ -25,14 +25,20 @@ import Data.Typeable
 import Development.IDE as D
 import Development.IDE.GHC.Compat (ParsedModule(ParsedModule))
 import Development.IDE.Core.Rules (useE)
-import Development.IDE.Core.Shake (getDiagnostics, getHiddenDiagnostics)
+import Development.IDE.Core.Shake (getDiagnostics, getHiddenDiagnostics, getIdeOptionsIO)
 import GHC.Generics
 import Ide.Plugin
 import Ide.Types
 import Language.Haskell.LSP.Types
 import Text.Regex.TDFA.Text()
 
+import Control.Monad.IO.Class
+
 import qualified Language.Haskell.LSP.Core as LSP
+import Development.IDE.Core.PositionMapping
+import Data.Maybe
+
+import Development.IDE.Plugin.Completions hiding (getCompletionsLSP)
 
 -- ---------------------------------------------------------------------
 
@@ -260,12 +266,18 @@ getCompletionsLSP lsp ide
                      ,_position=_position
                      ,_context=_completionContext} = do
     contents <- LSP.getVirtualFileFunc lsp $ toNormalizedUri uri
-    print contents
+    logInfo (ideLogger ide) "Inside custom completions ---------------------"
+    logInfo (ideLogger ide) $ T.pack $ show contents
     fmap Right $ case (contents, uriToFilePath' uri) of
-        (Just _cnts, Just _path) -> do
-            let _npath = toNormalizedFilePath' _path
+        (Just _cnts, Just path) -> do
+            let npath = toNormalizedFilePath' path
             (_ideOpts, _compls) <- runIdeAction "Completion" (shakeExtras ide) $ do
-                return (Nothing, Nothing)
+                -- for now lets use the current Rules provided by GHCIde. We will re-implement them laster ourselves.
+                opts <- liftIO $ getIdeOptionsIO $ shakeExtras ide
+                compls <- useWithStaleFast ProduceCompletions npath
+                pm <- useWithStaleFast GetParsedModule npath
+                binds <- fromMaybe (mempty, zeroMapping) <$> useWithStaleFast GetBindings npath
+                pure (opts, fmap (,pm,binds) compls )
             return $ Completions $ List [sampleCompletionItem]
         _ -> return $ Completions $ List []
 -- ---------------------------------------------------------------------
