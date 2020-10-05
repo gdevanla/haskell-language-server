@@ -330,6 +330,28 @@ mkModCompl _label =
     Nothing
     Nothing
 
+mkImportCompl :: T.Text -> T.Text -> CompletionItem
+mkImportCompl enteredQual label =
+  CompletionItem
+    m
+    (Just CiModule)
+    (List [])
+    (Just label)
+    Nothing
+    Nothing
+    Nothing
+    Nothing
+    Nothing
+    Nothing
+    Nothing
+    Nothing
+    Nothing
+    Nothing
+    Nothing
+    Nothing
+  where
+    m = fromMaybe "" (T.stripPrefix enteredQual label)
+
 --Returns the cached completions for the given module and position
 getCompletions
     :: IdeOptions
@@ -350,13 +372,22 @@ getCompletions _ideOpts ideState CC{..} _maybe_parsed (_localBindings, _bmapping
         filtModNameCompls = map mkModCompl $
             mapMaybe (T.stripPrefix enteredQual) $
             Fuzzy.simpleFilter fullPrefix allModNamesAsNS
+
+
+        filtListWith f list =
+            [ f label
+            | label <- Fuzzy.simpleFilter fullPrefix list,
+              enteredQual `T.isPrefixOf` label
+            ]
+        filtImportCompls = filtListWith (mkImportCompl enteredQual) importableModules
+
         result
             | "import " `T.isPrefixOf` fullLine
-            = filtModNameCompls
+            = filtImportCompls
             | otherwise
-            = []
-    logInfo (ideLogger ideState) $ "***** allModNamesAsNS *******"
-    logInfo (ideLogger ideState) $ T.pack $ show allModNamesAsNS
+            = filtModNameCompls
+    logInfo (ideLogger ideState) $ "***** importableModules *******"
+    logInfo (ideLogger ideState) $ T.pack $ show importableModules
     return result
 
 
