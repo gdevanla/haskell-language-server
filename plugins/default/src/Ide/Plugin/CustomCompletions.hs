@@ -7,6 +7,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections     #-}
 {-# LANGUAGE TypeFamilies      #-}
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE NamedFieldPuns #-}
+
+
 
 module Ide.Plugin.CustomCompletions
   (
@@ -37,8 +41,14 @@ import Control.Monad.IO.Class
 import qualified Language.Haskell.LSP.Core as LSP
 import Development.IDE.Core.PositionMapping
 import Data.Maybe
+import qualified Language.Haskell.LSP.VFS as VFS
+import Language.Haskell.LSP.Types.Capabilities
 
 import Development.IDE.Plugin.Completions hiding (getCompletionsLSP)
+import Development.IDE.Plugin.Completions.Types
+import Development.IDE.Types.Options
+import Development.IDE.Spans.LocalBindings
+import qualified Text.Fuzzy as Fuzzy
 
 -- ---------------------------------------------------------------------
 
@@ -263,21 +273,136 @@ sampleCompletionItem =
 getCompletionsLSP :: CompletionProvider
 getCompletionsLSP lsp ide
     CompletionParams {_textDocument=TextDocumentIdentifier uri
-                     ,_position=_position
-                     ,_context=_completionContext} = do
+                     ,_position=position
+                     ,_context=completionContext} = do
     contents <- LSP.getVirtualFileFunc lsp $ toNormalizedUri uri
     logInfo (ideLogger ide) "Inside custom completions ---------------------"
     logInfo (ideLogger ide) $ T.pack $ show contents
     fmap Right $ case (contents, uriToFilePath' uri) of
-        (Just _cnts, Just path) -> do
+        (Just cnts, Just path) -> do
             let npath = toNormalizedFilePath' path
-            (_ideOpts, _compls) <- runIdeAction "Completion" (shakeExtras ide) $ do
+            (ideOpts, compls) <- runIdeAction "Completion" (shakeExtras ide) $ do
                 -- for now lets use the current Rules provided by GHCIde. We will re-implement them laster ourselves.
                 opts <- liftIO $ getIdeOptionsIO $ shakeExtras ide
                 compls <- useWithStaleFast ProduceCompletions npath
                 pm <- useWithStaleFast GetParsedModule npath
                 binds <- fromMaybe (mempty, zeroMapping) <$> useWithStaleFast GetBindings npath
-                pure (opts, fmap (,pm,binds) compls )
-            return $ Completions $ List [sampleCompletionItem]
+                pure (opts, fmap (,pm,binds) compls)
+            case compls of
+                Just ((cci', _), parsedMod, bindMap) -> do
+                    pfix <- VFS.getCompletionPrefix position cnts
+                    case (pfix, completionContext) of
+                        (Just (VFS.PosPrefixInfo _ "" _ _), Just CompletionContext { _triggerCharacter = Just "."}) ->
+                            return $ Completions $ List [sampleCompletionItem]
+                        (Just pfix', _) -> do
+                            -- TODO pass the real capabilities here (or remove the logic for snippets)
+                            let fakeClientCapabilities = ClientCapabilities Nothing Nothing Nothing Nothing
+                            -- return $ Completions $ List [sampleCompletionItem]
+                            Completions . List <$> getCompletions ideOpts ide cci' parsedMod bindMap pfix' fakeClientCapabilities (WithSnippets True)
+                        _ -> return (Completions $ List [])
+                _ -> return $ Completions $ List [sampleCompletionItem]
         _ -> return $ Completions $ List []
 -- ---------------------------------------------------------------------
+
+_mkDefaultCompl :: T.Text -> T.Text -> CompletionItem
+_mkDefaultCompl label insertText =
+  CompletionItem label (Just CiKeyword) (List []) Nothing
+    Nothing Nothing Nothing Nothing Nothing (Just insertText) (Just Snippet)
+    Nothing Nothing Nothing Nothing Nothing
+
+mkModCompl :: T.Text -> CompletionItem
+mkModCompl _label =
+  CompletionItem
+    "mkModCompl"
+    (Just CiModule)
+    (List [])
+    Nothing
+    Nothing
+    Nothing
+    Nothing
+    Nothing
+    Nothing
+    Nothing
+    Nothing
+    Nothing
+    Nothing
+    Nothing
+    Nothing
+    Nothing
+
+--Returns the cached completions for the given module and position
+getCompletions
+    :: IdeOptions
+    -> IdeState
+    -> CachedCompletions
+    -> Maybe (ParsedModule, PositionMapping)
+    -> (Bindings, PositionMapping)
+    -> VFS.PosPrefixInfo
+    -> ClientCapabilities
+    -> WithSnippets
+    -> IO [CompletionItem]
+getCompletions _ideOpts ideState CC{..} _maybe_parsed (_localBindings, _bmapping) prefixInfo _cp _ws = do
+    let VFS.PosPrefixInfo { fullLine, prefixModule, prefixText } = prefixInfo
+        enteredQual = if T.null prefixModule then "" else prefixModule <> "."
+        fullPrefix  = enteredQual <> prefixText
+        _fulline = fullLine
+        -- provide module names when used with qualifier
+        filtModNameCompls = map mkModCompl $
+            mapMaybe (T.stripPrefix enteredQual) $
+            Fuzzy.simpleFilter fullPrefix allModNamesAsNS
+        result
+            | "import " `T.isPrefixOf` fullLine
+            = filtModNameCompls
+            | otherwise
+            = []
+    logInfo (ideLogger ideState) $ "***** allModNamesAsNS *******"
+    logInfo (ideLogger ideState) $ T.pack $ show allModNamesAsNS
+    return result
+
+
+    -- pos = VFS.cursorPos prefixInfo
+
+    -- filtCompls = map Fuzzy.original $ Fuzzy.filter prefixText ctxCompls "" "" label False
+    --     where
+    --       mcc = case maybe_parsed of
+    --         Nothing -> Nothing
+    --         Just (pm, pmapping) ->
+    --           let PositionMapping pDelta = pmapping
+    --               position' = fromDelta pDelta pos
+    --               lpos = lowerRange position'
+    --               hpos = upperRange position'
+    --           in getCContext lpos pm <|> getCContext hpos pm
+
+    --       -- completions specific to the current context
+    --       ctxCompls' = case mcc of
+    --                     Nothing -> compls
+    --                     Just TypeContext -> filter isTypeCompl compls
+    --                     Just ValueContext -> filter (not . isTypeCompl) compls
+    --                     Just _ -> filter (not . isTypeCompl) compls
+    --       -- Add whether the text to insert has backticks
+    --       ctxCompls = map (\comp -> comp { isInfix = infixCompls }) ctxCompls'
+
+    --       infixCompls :: Maybe Backtick
+    --       infixCompls = isUsedAsInfix fullLine prefixModule prefixText pos
+
+    --       PositionMapping bDelta = bmapping
+    --       oldPos = fromDelta bDelta $ VFS.cursorPos prefixInfo
+    --       startLoc = lowerRange oldPos
+    --       endLoc = upperRange oldPos
+    --       localCompls = map (uncurry localBindsToCompItem) $ getFuzzyScope localBindings startLoc endLoc
+    --       localBindsToCompItem :: Name -> Maybe Type -> CompItem
+    --       localBindsToCompItem name typ = CI ctyp pn thisModName ty pn Nothing emptySpanDoc (not $ isValOcc occ)
+    --         where
+    --           occ = nameOccName name
+    --           ctyp = occNameToComKind Nothing occ
+    --           pn = ppr name
+    --           ty = ppr <$> typ
+    --           thisModName = case nameModule_maybe name of
+    --             Nothing -> Left $ nameSrcSpan name
+    --             Just m -> Right $ ppr m
+
+    --       compls = if T.null prefixModule
+    --         then localCompls ++ unqualCompls
+    --         else Map.findWithDefault [] prefixModule $ getQualCompls qualCompls
+
+    -- return filtCompls
