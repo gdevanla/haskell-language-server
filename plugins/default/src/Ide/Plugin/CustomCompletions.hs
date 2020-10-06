@@ -27,7 +27,7 @@ import Data.Hashable
 import qualified Data.Text as T
 import Data.Typeable
 import Development.IDE as D
-import Development.IDE.GHC.Compat (ParsedModule(ParsedModule))
+import Development.IDE.GHC.Compat (ParsedModule(ParsedModule), Type)
 import Development.IDE.Core.Rules (useE)
 import Development.IDE.Core.Shake (getDiagnostics, getHiddenDiagnostics, getIdeOptionsIO)
 import GHC.Generics
@@ -49,6 +49,12 @@ import Development.IDE.Plugin.Completions.Types
 import Development.IDE.Types.Options
 import Development.IDE.Spans.LocalBindings
 import qualified Text.Fuzzy as Fuzzy
+import Outputable (Outputable)
+
+--import Development.IDE.GHC.Compat
+import Name
+import GHC.Unicode
+import Development.IDE.Spans.Common (emptySpanDoc)
 
 -- ---------------------------------------------------------------------
 
@@ -363,7 +369,7 @@ getCompletions
     -> ClientCapabilities
     -> WithSnippets
     -> IO [CompletionItem]
-getCompletions _ideOpts ideState CC{..} _maybe_parsed (_localBindings, _bmapping) prefixInfo _cp _ws = do
+getCompletions _ideOpts ideState CC{..} _maybe_parsed (localBindings, bmapping) prefixInfo _cp _ws = do
     let VFS.PosPrefixInfo { fullLine, prefixModule, prefixText } = prefixInfo
         enteredQual = if T.null prefixModule then "" else prefixModule <> "."
         fullPrefix  = enteredQual <> prefixText
@@ -381,13 +387,36 @@ getCompletions _ideOpts ideState CC{..} _maybe_parsed (_localBindings, _bmapping
             ]
         filtImportCompls = filtListWith (mkImportCompl enteredQual) importableModules
 
-        result
+
+        PositionMapping bDelta = bmapping
+        oldPos = fromDelta bDelta $ VFS.cursorPos prefixInfo
+        startLoc = lowerRange oldPos
+        endLoc = upperRange oldPos
+        scope = getFuzzyScope localBindings startLoc endLoc
+        scope' = map snd scope
+        localCompls = map (uncurry localBindsToCompItem) $ getFuzzyScope localBindings startLoc endLoc
+        localBindsToCompItem :: Name -> Maybe Type -> CompItem
+        localBindsToCompItem name typ = CI ctyp pn thisModName ty pn Nothing emptySpanDoc (not $ isValOcc occ)
+            where
+              occ = nameOccName name
+              ctyp = occNameToComKind Nothing occ
+              pn = ppr name
+              ty = ppr <$> typ
+              thisModName = case nameModule_maybe name of
+                Nothing -> Left $ nameSrcSpan name
+                Just m -> Right $ ppr m
+
+    logInfo (ideLogger ideState) $ "***** Postion *******"
+    logInfo (ideLogger ideState) $ T.pack $ show startLoc
+    logInfo (ideLogger ideState) $ T.pack $ show endLoc
+    logInfo (ideLogger ideState) $ ppr scope'
+    logInfo (ideLogger ideState) $ T.pack $ show localCompls
+
+    let result
             | "import " `T.isPrefixOf` fullLine
             = filtImportCompls
             | otherwise
             = filtModNameCompls
-    logInfo (ideLogger ideState) $ "***** importableModules *******"
-    logInfo (ideLogger ideState) $ T.pack $ show importableModules
     return result
 
 
@@ -437,3 +466,20 @@ getCompletions _ideOpts ideState CC{..} _maybe_parsed (_localBindings, _bmapping
     --         else Map.findWithDefault [] prefixModule $ getQualCompls qualCompls
 
     -- return filtCompls
+
+ppr :: Outputable a => a -> T.Text
+ppr = T.pack . prettyPrint
+
+
+occNameToComKind :: Maybe T.Text -> OccName -> CompletionItemKind
+occNameToComKind ty oc
+  | isVarOcc oc = case occNameString oc of
+    i : _ | isUpper i -> CiConstructor
+    _ -> CiFunction
+  | isTcOcc oc = case ty of
+    Just t
+      | "Constraint" `T.isSuffixOf` t ->
+        CiClass
+    _ -> CiStruct
+  | isDataOcc oc = CiConstructor
+  | otherwise = CiVariable
