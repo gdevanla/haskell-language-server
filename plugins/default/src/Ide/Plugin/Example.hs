@@ -31,6 +31,9 @@ import Ide.Plugin
 import Ide.Types
 import Language.Haskell.LSP.Types
 import Text.Regex.TDFA.Text()
+import qualified Language.Haskell.LSP.Core as LSP
+import qualified Language.Haskell.LSP.VFS as VFS
+--import Development.IDE.Plugin.Completions
 
 -- ---------------------------------------------------------------------
 
@@ -202,6 +205,81 @@ symbols _lf _ide (DocumentSymbolParams _doc _mt)
 
 -- ---------------------------------------------------------------------
 
+_getCompletionsLSP
+    :: LSP.LspFuncs cofd
+    -> IdeState
+    -> CompletionParams
+    -> IO (Either ResponseError CompletionResponseResult)
+_getCompletionsLSP lsp ide
+  CompletionParams{_textDocument=TextDocumentIdentifier uri
+                  ,_position=position
+                  ,_context=completionContext} = do
+    contents <- LSP.getVirtualFileFunc lsp $ toNormalizedUri uri
+    fmap Right $ case (contents, uriToFilePath' uri) of
+      (Just cnts, Just path) -> do
+        let npath = toNormalizedFilePath' path
+        pm <- runIdeAction "RecordsSnippets" (shakeExtras ide) $ do
+            --opts <- liftIO $ getIdeOptionsIO $ shakeExtras ide
+            --compls <- useWithStaleFast ProduceCompletions npath
+            pm <- useWithStaleFast GetParsedModule npath
+            --binds <- fromMaybe (mempty, zeroMapping) <$> useWithStaleFast GetBindings npath
+            pure pm
+        case pm of
+          Just _parsedMod -> do
+            pfix <- VFS.getCompletionPrefix position cnts
+            case (pfix, completionContext) of
+              (Just (VFS.PosPrefixInfo _ "" _ _), Just CompletionContext { _triggerCharacter = Just "."})
+                -> return (Completions $ List [])
+              (Just _pfix', _) -> do
+                  -- TODO pass the real capabilities here (or remove the logic for snippets)
+                --let fakeClientCapabilities = ClientCapabilities Nothing Nothing Nothing Nothing
+                --Completions . List <$> getCompletions ideOpts cci' parsedMod bindMap pfix' fakeClientCapabilities (WithSnippets True)
+                  sampleCompletion
+              _ -> return (Completions $ List [])
+          _ -> return (Completions $ List [])
+      _ -> return (Completions $ List [])
+
+
+sampleCompletion :: IO CompletionResponseResult
+sampleCompletion = do
+  pure $ Completions $ List [r]
+  where
+    r =
+      CompletionItem
+        label
+        kind
+        tags
+        detail
+        documentation
+        deprecated
+        preselect
+        sortText
+        filterText
+        insertText
+        insertTextFormat
+        textEdit
+        additionalTextEdits
+        commitCharacters
+        command
+        xd
+    label = "Example completion"
+    kind = Nothing
+    tags = List []
+    detail = Nothing
+    documentation = Nothing
+    deprecated = Nothing
+    preselect = Nothing
+    sortText = Nothing
+    filterText = Nothing
+    insertText = Just "Record $fld1 $fld2 $fld3 $fld4"
+    insertTextFormat = Nothing
+    textEdit = Nothing
+    additionalTextEdits = Nothing
+    commitCharacters = Nothing
+    command = Nothing
+    xd = Nothing
+
+
 completion :: CompletionProvider
 completion _lf _ide (CompletionParams _doc _pos _mctxt _mt)
     = pure $ Right $ Completions $ List [r]
@@ -219,7 +297,7 @@ completion _lf _ide (CompletionParams _doc _pos _mctxt _mt)
         preselect = Nothing
         sortText = Nothing
         filterText = Nothing
-        insertText = Nothing
+        insertText = Just "Record $fld1 $fld2 $fld4"
         insertTextFormat = Nothing
         textEdit = Nothing
         additionalTextEdits = Nothing
