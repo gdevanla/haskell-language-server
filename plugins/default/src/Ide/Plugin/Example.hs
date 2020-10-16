@@ -1,3 +1,7 @@
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE NamedFieldPuns #-}
+-- TODO1 added by Example Plugin directly
+-- TODO1 added by Example Plugin directly
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE DeriveAnyClass    #-}
 {-# LANGUAGE DeriveGeneric     #-}
@@ -23,7 +27,7 @@ import Data.Hashable
 import qualified Data.Text as T
 import Data.Typeable
 import Development.IDE as D
-import Development.IDE.GHC.Compat (ParsedModule(ParsedModule))
+--import Development.IDE.GHC.Compat (parsedSource, ParsedModule(ParsedModule))
 import Development.IDE.Core.Rules (useE)
 import Development.IDE.Core.Shake (getDiagnostics, getHiddenDiagnostics)
 import GHC.Generics
@@ -33,6 +37,10 @@ import Language.Haskell.LSP.Types
 import Text.Regex.TDFA.Text()
 import qualified Language.Haskell.LSP.Core as LSP
 import qualified Language.Haskell.LSP.VFS as VFS
+import Development.IDE.GHC.Compat
+import Data.Maybe (catMaybes)
+import GhcPlugins (occNameString, rdrNameOcc)
+import Language.Haskell.GHC.ExactPrint.Utils (showGhc)
 --import Development.IDE.Plugin.Completions
 
 -- ---------------------------------------------------------------------
@@ -45,7 +53,7 @@ descriptor plId = (defaultPluginDescriptor plId)
   , pluginCodeLensProvider   = Just codeLens
   , pluginHoverProvider      = Just hover
   , pluginSymbolsProvider    = Just symbols
-  , pluginCompletionProvider = Just completion
+  , pluginCompletionProvider = Just getCompletionsLSP
   }
 
 -- ---------------------------------------------------------------------
@@ -205,12 +213,12 @@ symbols _lf _ide (DocumentSymbolParams _doc _mt)
 
 -- ---------------------------------------------------------------------
 
-_getCompletionsLSP
+getCompletionsLSP
     :: LSP.LspFuncs cofd
     -> IdeState
     -> CompletionParams
     -> IO (Either ResponseError CompletionResponseResult)
-_getCompletionsLSP lsp ide
+getCompletionsLSP lsp ide
   CompletionParams{_textDocument=TextDocumentIdentifier uri
                   ,_position=position
                   ,_context=completionContext} = do
@@ -225,23 +233,70 @@ _getCompletionsLSP lsp ide
             --binds <- fromMaybe (mempty, zeroMapping) <$> useWithStaleFast GetBindings npath
             pure pm
         case pm of
-          Just _parsedMod -> do
+          Just (parsedMod, _) -> do
             pfix <- VFS.getCompletionPrefix position cnts
             case (pfix, completionContext) of
               (Just (VFS.PosPrefixInfo _ "" _ _), Just CompletionContext { _triggerCharacter = Just "."})
                 -> return (Completions $ List [])
-              (Just _pfix', _) -> do
+              (Just pfix', _) -> do
                   -- TODO pass the real capabilities here (or remove the logic for snippets)
                 --let fakeClientCapabilities = ClientCapabilities Nothing Nothing Nothing Nothing
                 --Completions . List <$> getCompletions ideOpts cci' parsedMod bindMap pfix' fakeClientCapabilities (WithSnippets True)
-                  sampleCompletion
+                  logInfo (ideLogger ide) $ T.pack $ "**********************************"
+                  logInfo (ideLogger ide) $ T.pack $ show completionContext
+                  logInfo (ideLogger ide) $ T.pack $ show pfix'
+                  findLocalCompletions ide parsedMod pfix'
               _ -> return (Completions $ List [])
           _ -> return (Completions $ List [])
       _ -> return (Completions $ List [])
 
 
-sampleCompletion :: IO CompletionResponseResult
-sampleCompletion = do
+findLocalCompletions :: IdeState -> ParsedModule -> VFS.PosPrefixInfo -> IO CompletionResponseResult
+findLocalCompletions ide  _pmod pfix = do
+    let _hsmodule = unLoc (parsedSource _pmod)
+        hsDecls = hsmodDecls _hsmodule
+        ctxStr = (T.unpack . VFS.prefixText $ pfix)
+        completionData = findFields ctxStr (unLoc <$> hsDecls)
+    x <- sampleCompletion ctxStr completionData
+    logInfo (ideLogger ide) $ "*****Showing Completion Data\n"
+    logInfo (ideLogger ide) $ T.pack $ show completionData
+    return x
+
+
+findFields :: String -> [HsDecl GhcPs] -> [(String, String)]
+findFields  ctxStr decls = name_type
+  where
+    dataDefns = catMaybes $ findDataDefns <$> decls
+    findDataDefns decl =
+      case decl of
+        TyClD _ (DataDecl{tcdDataDefn}) -> Just tcdDataDefn
+        _ -> Nothing
+    conDecls = concat [ unLoc <$> dd_cons dataDefn | dataDefn <- dataDefns]
+    h98 = catMaybes $ findH98 <$> conDecls
+
+
+    findH98 conDecl = case conDecl of
+      ConDeclH98{..} -> Just (unLoc con_name, con_args)
+      ConDeclGADT{} -> Nothing  -- TODO: Expand this out later
+      _ -> Nothing
+
+    conArgs = [snd x | x  <- h98, (occNameString . rdrNameOcc . fst $ x) == ctxStr]
+    flds = concat . catMaybes $ getFlds <$> conArgs
+    getFlds conArg = case conArg of
+      RecCon rec -> Just $ unLoc <$> (unLoc rec)
+      _ -> Nothing
+    name_type = map (\x -> ((showGhc . fst $ x), (showGhc . snd $ x))) (catMaybes $ extract <$> flds)
+
+    extract ConDeclField{..} = let
+      fld_type = unLoc cd_fld_type
+      fld_name = rdrNameFieldOcc $ unLoc . head $ cd_fld_names --TODO: Why is cd_fld_names a list?
+        in
+        Just (fld_name, fld_type)
+    extract _ = Nothing
+
+
+sampleCompletion :: String -> [(String, String)] -> IO CompletionResponseResult
+sampleCompletion ctxStr completionData = do
   pure $ Completions $ List [r]
   where
     r =
@@ -262,7 +317,7 @@ sampleCompletion = do
         commitCharacters
         command
         xd
-    label = "Example completion"
+    label = T.pack ctxStr
     kind = Nothing
     tags = List []
     detail = Nothing
@@ -271,7 +326,7 @@ sampleCompletion = do
     preselect = Nothing
     sortText = Nothing
     filterText = Nothing
-    insertText = Just "Record $fld1 $fld2 $fld3 $fld4"
+    insertText = Just $ buildSnippet
     insertTextFormat = Nothing
     textEdit = Nothing
     additionalTextEdits = Nothing
@@ -279,30 +334,32 @@ sampleCompletion = do
     command = Nothing
     xd = Nothing
 
+    buildSnippet = T.pack $ concat $ map (\x-> ("$" <> (fst x))) completionData
 
-completion :: CompletionProvider
-completion _lf _ide (CompletionParams _doc _pos _mctxt _mt)
-    = pure $ Right $ Completions $ List [r]
-    where
-        r = CompletionItem label kind tags detail documentation deprecated preselect
-                           sortText filterText insertText insertTextFormat
-                           textEdit additionalTextEdits commitCharacters
-                           command xd
-        label = "Example completion"
-        kind = Nothing
-        tags = List []
-        detail = Nothing
-        documentation = Nothing
-        deprecated = Nothing
-        preselect = Nothing
-        sortText = Nothing
-        filterText = Nothing
-        insertText = Just "Record $fld1 $fld2 $fld4"
-        insertTextFormat = Nothing
-        textEdit = Nothing
-        additionalTextEdits = Nothing
-        commitCharacters = Nothing
-        command = Nothing
-        xd = Nothing
 
--- ---------------------------------------------------------------------
+-- completion :: CompletionProvider
+-- completion _lf _ide (CompletionParams _doc _pos _mctxt _mt)
+--     = pure $ Right $ Completions $ List [r]
+--     where
+--         r = CompletionItem label kind tags detail documentation deprecated preselect
+--                            sortText filterText insertText insertTextFormat
+--                            textEdit additionalTextEdits commitCharacters
+--                            command xd
+--         label = "Example completion"
+--         kind = Nothing
+--         tags = List []
+--         detail = Nothing
+--         documentation = Nothing
+--         deprecated = Nothing
+--         preselect = Nothing
+--         sortText = Nothing
+--         filterText = Nothing
+--         insertText = Just "Record $fld1 $fld2 $fld4"
+--         insertTextFormat = Nothing
+--         textEdit = Nothing
+--         additionalTextEdits = Nothing
+--         commitCharacters = Nothing
+--         command = Nothing
+--         xd = Nothing
+
+-- -- ---------------------------------------------------------------------
